@@ -73,6 +73,11 @@ class StabilityDetector:
         self._previous: _WindowStats | None = None
         self._recent_window_means: list[float] = []
         self._consecutive_stable = 0
+        # Telemetry only -- read by StageMachine to tell "never got close to
+        # stable" (TIMEOUT) apart from "was partway there and ran out of
+        # trial budget" (UNSTABLE). Reset alongside everything else so it
+        # reflects only the current stage's own history.
+        self.max_consecutive_stable_observed = 0
 
     def update(self, trial: Trial) -> StabilityEvent | None:
         self._current.add(trial)
@@ -93,6 +98,9 @@ class StabilityDetector:
         stable_now = self._windows_are_stable(self._previous, window)
         self._previous = window
         self._consecutive_stable = self._consecutive_stable + 1 if stable_now else 0
+        self.max_consecutive_stable_observed = max(
+            self.max_consecutive_stable_observed, self._consecutive_stable
+        )
 
         if self._consecutive_stable >= self.config.consecutive_windows_required:
             return StabilityEvent(
@@ -111,6 +119,7 @@ class StabilityDetector:
         self._previous = None
         self._recent_window_means = []
         self._consecutive_stable = 0
+        self.max_consecutive_stable_observed = 0
 
     def _windows_are_stable(self, prev: _WindowStats, curr: _WindowStats) -> bool:
         tv = tv_distance(prev.action_distribution(), curr.action_distribution())

@@ -18,9 +18,17 @@ FORBIDDEN_MODULES = {
 }
 
 TARGET_FILES = [
-    *sorted((PROJECT_ROOT / "self_fly" / "agent").glob("*.py")),
+    # rglob, not glob: agent/baseline/*.py and agent/connectome/*.py must
+    # stay covered too, not just files directly under agent/.
+    *sorted((PROJECT_ROOT / "self_fly" / "agent").rglob("*.py")),
     PROJECT_ROOT / "self_fly" / "visualization" / "render.py",
 ]
+
+
+def test_target_files_cover_baseline_and_connectome_subpackages():
+    covered = {str(p.relative_to(PROJECT_ROOT)) for p in TARGET_FILES}
+    assert any("agent/baseline" in p for p in covered), covered
+    assert any("agent/connectome" in p for p in covered), covered
 
 
 def _collect_identifiers(tree: ast.AST) -> set[str]:

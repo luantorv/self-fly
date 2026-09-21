@@ -6,7 +6,8 @@ from typing import Optional
 
 from self_fly.config.schema import StageConfig
 
-from .stability import StabilityEvent
+from .stability import StabilityDetector, StabilityEvent
+from .stage_outcome import StageOutcome
 from .types import Trial
 
 
@@ -25,6 +26,13 @@ class StageEvent:
     payload: dict = field(default_factory=dict)
 
 
+_CONFLICT_STAGE_SNAPSHOT_NAMES = {
+    Stage.STAGE_2_MILD_CONFLICT: "pi_3",
+    Stage.STAGE_3_STRONG_CONFLICT: "pi_4",
+    Stage.STAGE_4_THREE_WAY_CONFLICT: "pi_5",
+}
+
+
 class StageMachine:
     """Phase A drives only stage 0 -> stage 1 -> finished:
 
@@ -34,18 +42,31 @@ class StageMachine:
                -> capture pi_1 on first exposure; capture pi_2 and finish
                   once stable again (or a trial budget is exhausted).
 
-    Stages 2-4 (progressive conflict) are declared in `Stage` and can be
-    added as StageConfig entries with populated stimulus_mix/reward
-    overrides without touching this class's stage-0/1 logic -- only the
-    `process` method needs a new branch per added stage.
+    Stages 2-4 (progressive conflict) are declared in `Stage` and are
+    driven by `_process_conflict_stage`, shared across all three -- they
+    differ only in which StageConfig.conflict rewards are active, not in
+    how entry/exit/snapshot naming works. Whether a stage's conclusion
+    advances into the next configured stage or ends the experiment is
+    decided generically (see `_exit_or_advance`): a StageConfig for
+    stage N+1 in the same run means stage N's conclusion advances into it,
+    its absence means the experiment finishes there -- this is what lets
+    default_config()'s stage 1 keep finishing exactly as before while a
+    conflict-augmented config continues into stage 2.
     """
 
-    def __init__(self, stage_configs: list[StageConfig]):
+    def __init__(
+        self,
+        stage_configs: list[StageConfig],
+        stability_detector: StabilityDetector | None = None,
+    ):
         self._config_by_stage = {c.stage: c for c in stage_configs}
         self.current_stage = Stage.STAGE_0_LEARNING
         self.finished = False
         self._self_exposed = False
         self._stage_entry_trial_index = 0
+        # Read (never mutated) only to tell UNSTABLE apart from TIMEOUT when
+        # a stage exits via max_trials instead of real stability.
+        self._stability_detector = stability_detector
 
     def current_stage_config(self) -> StageConfig:
         return self._config_by_stage[int(self.current_stage)]
@@ -62,6 +83,8 @@ class StageMachine:
             events.extend(self._process_stage_0(trial, stability_event))
         elif self.current_stage == Stage.STAGE_1_SELF_INTRODUCED:
             events.extend(self._process_stage_1(trial, stability_event))
+        elif self.current_stage in _CONFLICT_STAGE_SNAPSHOT_NAMES:
+            events.extend(self._process_conflict_stage(trial, stability_event))
 
         return events
 
@@ -95,7 +118,12 @@ class StageMachine:
     ) -> list[StageEvent]:
         events: list[StageEvent] = []
 
-        if not self._self_exposed and trial.ground_truth_label == "self_a":
+        # "Special exposure" = any stimulus other than plain REAL/FALSA --
+        # self_a, control, self_b, other, whichever this stage's
+        # stimulus_mix actually uses. Generalized so pi_1/hit_stability
+        # gating doesn't need a growing list of label names hardcoded here.
+        is_special_exposure = trial.ground_truth_label not in ("real", "falsa")
+        if not self._self_exposed and is_special_exposure:
             self._self_exposed = True
             events.append(
                 StageEvent(
@@ -119,14 +147,89 @@ class StageMachine:
         }.get(stage_cfg.exit_condition, False)
 
         if should_exit:
+            outcome = self._resolve_outcome(hit_stability)
+            snapshot_name = "pi_2" if outcome == StageOutcome.STABLE else f"pi_2_{outcome.value}"
+            events.extend(
+                self._exit_or_advance(trial, outcome, snapshot_name, trials_in_stage)
+            )
+
+        return events
+
+    def _process_conflict_stage(
+        self, trial: Trial, stability_event: Optional[StabilityEvent]
+    ) -> list[StageEvent]:
+        stage_cfg = self.current_stage_config()
+        trials_in_stage = trial.trial_index - self._stage_entry_trial_index + 1
+        hit_max_trials = (
+            stage_cfg.max_trials is not None and trials_in_stage >= stage_cfg.max_trials
+        )
+        hit_stability = stability_event is not None
+
+        should_exit = {
+            "stability_detected": hit_stability,
+            "max_trials": hit_max_trials,
+            "stability_detected_or_max_trials": hit_stability or hit_max_trials,
+        }.get(stage_cfg.exit_condition, False)
+
+        if not should_exit:
+            return []
+
+        outcome = self._resolve_outcome(hit_stability)
+        base_name = _CONFLICT_STAGE_SNAPSHOT_NAMES[self.current_stage]
+        snapshot_name = base_name if outcome == StageOutcome.STABLE else f"{base_name}_{outcome.value}"
+        return self._exit_or_advance(trial, outcome, snapshot_name, trials_in_stage)
+
+    def _exit_or_advance(
+        self,
+        trial: Trial,
+        outcome: StageOutcome,
+        snapshot_name: str,
+        trials_in_stage: int,
+    ) -> list[StageEvent]:
+        """Shared tail for every stage that can conclude (1 through 4):
+        capture its snapshot, report the outcome, then either advance into
+        the next configured stage or finish -- whichever the run's own
+        StageConfig list actually provides, decided generically so adding
+        stage N+1's config is the only thing needed to chain stages."""
+        concluding_stage = int(self.current_stage)
+        events = [
+            StageEvent(
+                "capture_snapshot",
+                trial.trial_index,
+                {"name": snapshot_name, "stage": concluding_stage},
+            ),
+            StageEvent(
+                "stage_outcome",
+                trial.trial_index,
+                {
+                    "stage": concluding_stage,
+                    "outcome": outcome.value,
+                    "snapshot_name": snapshot_name,
+                    "trials_in_stage": trials_in_stage,
+                },
+            ),
+        ]
+
+        next_stage_value = concluding_stage + 1
+        if next_stage_value in self._config_by_stage:
             events.append(
                 StageEvent(
-                    "capture_snapshot",
+                    "stage_changed",
                     trial.trial_index,
-                    {"name": "pi_2", "stage": int(Stage.STAGE_1_SELF_INTRODUCED)},
+                    {"from_stage": concluding_stage, "to_stage": next_stage_value},
                 )
             )
+            self.current_stage = Stage(next_stage_value)
+            self._stage_entry_trial_index = trial.trial_index + 1
+        else:
             events.append(StageEvent("experiment_finished", trial.trial_index, {}))
             self.finished = True
 
         return events
+
+    def _resolve_outcome(self, hit_stability: bool) -> StageOutcome:
+        if hit_stability:
+            return StageOutcome.STABLE
+        if self._stability_detector is not None and self._stability_detector.max_consecutive_stable_observed > 0:
+            return StageOutcome.UNSTABLE
+        return StageOutcome.TIMEOUT

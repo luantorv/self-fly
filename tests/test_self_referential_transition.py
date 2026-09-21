@@ -51,6 +51,11 @@ def test_pi0_pi1_pi2_are_captured_in_order_and_stage_transitions_once():
     stage_changed_events = [e for e in engine.stage_events if e.kind == "stage_changed"]
     assert stage_changed_events[0].payload == {"from_stage": 0, "to_stage": 1}
 
+    outcome_events = [e for e in engine.stage_events if e.kind == "stage_outcome"]
+    assert len(outcome_events) == 1
+    assert outcome_events[0].payload["outcome"] == "stable"
+    assert outcome_events[0].payload["snapshot_name"] == "pi_2"
+
 
 def test_self_stimulus_frozen_at_pi0_moment_matches_snapshot_weights():
     config = _fast_stability_config(seed=1)

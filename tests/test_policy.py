@@ -1,7 +1,7 @@
 import numpy as np
 
-from self_fly.agent.learner import REINFORCEUpdate
-from self_fly.agent.policy import LinearSoftmaxPolicy
+from self_fly.agent.baseline.learner import REINFORCEUpdate
+from self_fly.agent.baseline.policy import LinearSoftmaxPolicy
 from self_fly.config.schema import LearnerConfig
 
 

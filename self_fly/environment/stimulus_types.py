@@ -12,6 +12,7 @@ class StimulusLabel(Enum):
     SELF_A = "self_a"
     SELF_B = "self_b"
     OTHER = "other"
+    CONTROL = "control"
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,7 @@ estímulo → percepción → estado interno → política (softmax) → acción
 4. Se registra `π₁` justo tras la primera exposición, y `π₂` cuando la política vuelve a estabilizarse (o se agota un presupuesto de ensayos).
 5. Se comparan `π₀`, `π₁` y `π₂` con una distancia de Jensen-Shannon (y TV como referencia secundaria) sobre un conjunto de estímulos de referencia fijo.
 
-Todo esto es la **Fase A** (versión mínima funcional), ya implementada. La Fase B (grupo de control, `SELF_B`/`OTHER`, conflicto progresivo en 5 etapas, métricas avanzadas, arquitectura tipo conectoma, GUI 3D) está deliberadamente pendiente.
+Todo esto es la **Fase A** (versión mínima funcional), completa. La **Fase B** también está implementada: grupo de control (estímulo congelado in-distribution, sin ser SELF), `SELF_B`/`OTHER` (variante de firma propia + política de otro agente entrenado por separado), conflicto progresivo en etapas 2-4, estados explícitos `STABLE`/`UNSTABLE`/`TIMEOUT` (nunca se fuerza una convergencia que no ocurrió), entropía de política y distancia temporal `D_t` continua, comparación descriptiva entre condiciones y entre arquitecturas de agente, y un agente alternativo `ConnectomeInspiredAgent` intercambiable con el agente lineal original. Ver `self_fly/experiment/entropy.py`, `self_fly/experiment/stage_outcome.py`, `self_fly/agent/connectome/` y `self_fly/analysis/` para el detalle. Pendiente: renderer 3D (el punto de extensión `StimulusRenderer` ya existe en `self_fly/visualization/renderers/`, sin una implementación 3D todavía).
 
 ## Separación de responsabilidades
 
@@ -32,18 +32,19 @@ Todo esto es la **Fase A** (versión mínima funcional), ya implementada. La Fas
 
 ```
 self_fly/
-  config/         ExperimentConfig y todos los parámetros (recompensas, umbrales de estabilidad, etc.)
-  stimuli/        generación de estímulos REAL/FALSA y del estímulo autorreferencial
+  config/         ExperimentConfig y todos los parámetros (recompensas, umbrales de estabilidad, conflicto, etc.)
+  stimuli/        generación de estímulos REAL/FALSA, autorreferencial y de control
   environment/    tipos de estímulo y la frontera de aislamiento observe()
-  agent/          política softmax lineal + aprendizaje REINFORCE
-  rewards/        tabla (etiqueta, acción, etapa) -> recompensa
-  experiment/     motor (engine.py), máquina de etapas, detector de estabilidad, distancia entre políticas
-  metrics/        acumuladores de métricas en vivo
-  visualization/  render del estímulo, GUI de tkinter, gráficos matplotlib headless
+  agent/          interfaz de agente (interface.py) + factory; baseline/ (softmax lineal + REINFORCE, Fase A) y connectome/ (arquitectura recurrente reducida, Fase B)
+  rewards/        tabla (etiqueta, acción, etapa) -> recompensa, incluido el esquema mantener/cambiar del conflicto progresivo
+  experiment/     motor (engine.py), máquina de etapas (0-4), detector de estabilidad, StageOutcome, entropía, distancia entre políticas (snapshot y continua D_t), entrenamiento del agente auxiliar OTHER
+  analysis/       agregación multi-seed/multi-condición, comparación descriptiva, informe automático (observación vs. interpretación)
+  metrics/        acumuladores de métricas en vivo (recompensa, acciones, entropía)
+  visualization/  render del estímulo (backend-agnóstico) + renderers/ intercambiables (Tk, matplotlib, 3D pendiente), GUI de tkinter, gráficos matplotlib headless
   io/             logging JSONL y gestión de runs/<id>/
-run_experiment.py  # CLI headless
+run_experiment.py  # CLI headless (single-seed, multi-seed, multi-condición)
 run_gui.py          # GUI de tkinter (mismo motor)
-tests/              # 33 tests, incluido el de aislamiento AST
+tests/              # ver `Tests` más abajo, incluido el de aislamiento AST
 ```
 
 ## Instalación
@@ -95,11 +96,21 @@ python -m pytest tests/ -q
 |---|---|
 | `--config PATH` | Carga un `ExperimentConfig` guardado en JSON (en vez de la configuración por defecto) |
 | `--seed N` | Sobrescribe la semilla del config |
+| `--seeds "0:9"` / `"0,2,5"` | (solo headless) corre esa lista/rango de semillas y devuelve un agregado descriptivo, no una sola corrida |
+| `--agent baseline\|connectome` | Arquitectura del agente (default: `baseline`) |
+| `--condition baseline\|control\|self\|self_multi\|all` | Condición experimental; `all` corre las cuatro condiciones sobre las mismas semillas y las compara descriptivamente (requiere `--seeds`) |
 | `--run-name NOMBRE` | Sobrescribe el nombre de la corrida |
-| `--n-trials N` | (solo headless) número de ensayos a ejecutar |
+| `--n-trials N` | (solo headless) número de ensayos a ejecutar por corrida |
 | `--runs-dir DIR` | Directorio base para `runs/` (default: `runs/`) |
 | `--no-log` | (solo GUI) no persiste una carpeta de run |
 | `--step-delay-ms MS` | (solo GUI) retardo entre pasos del motor |
+
+Ejemplos:
+
+```bash
+nix run .#headless -- --agent connectome --condition self --seed 42
+nix run .#headless -- --condition all --seeds 0:9
+```
 
 ## Configuración
 
@@ -110,11 +121,12 @@ Todos los parámetros experimentales relevantes viven en `self_fly/config/schema
 Cada ejecución crea `runs/<run_id>/` con:
 
 - `config.json` — configuración completa + semilla
-- `trials.jsonl` — un registro por ensayo (estímulo, acción, probabilidades, recompensa, etc.)
-- `policy_snapshots.jsonl` — `π₀`, `π₁`, `π₂` con pesos y probabilidades sobre el conjunto de referencia
-- `events.jsonl` — detección de estabilidad, cambios de etapa, fin del experimento
-- `manifest.json` — id de corrida, hash de la config, semilla, timestamps, estado
-- `metrics_summary.json` y `plots/*.png` (probabilidades de acción y recompensa en el tiempo)
+- `trials.jsonl` — un registro por ensayo (estímulo, acción, probabilidades, recompensa, `policy_js_delta` = D_t, etc.)
+- `policy_snapshots.jsonl` — `π₀`, `π₁`, `π₂`... con pesos y probabilidades sobre el conjunto de referencia (el nombre indica el desenlace real: `pi_2` solo si hubo convergencia genuina, `pi_2_unstable`/`pi_2_timeout` si no)
+- `events.jsonl` — detección de estabilidad, cambios de etapa, `stage_outcome` (STABLE/UNSTABLE/TIMEOUT + entropía + distancia a inicio de etapa), fin del experimento
+- `manifest.json` — id de corrida, tipo de agente, condición experimental, hash de la config, revisión de git, semilla, timestamps, estado
+- `metrics_summary.json` y `plots/*.png` (probabilidades de acción, recompensa y entropía en el tiempo)
+- `report.md` — informe automático con secciones separadas de Observaciones (solo números) e Interpretación (disclaimers fijos, sin lenguaje antropomórfico)
 
 Con la misma semilla, dos corridas producen `trials.jsonl` idénticos (salvo el timestamp de cada línea, que refleja el reloj real).
 
@@ -124,7 +136,7 @@ Con la misma semilla, dos corridas producen `trials.jsonl` idénticos (salvo el 
 nix develop --command python -m pytest tests/ -q
 ```
 
-33 tests cubren: generación de estímulos sin atajo trivial, la frontera de aislamiento, convergencia de la política, el modelo de recompensa, el detector de estabilidad, la distancia entre políticas, la transición completa `π₀ → π₁ → π₂`, determinismo del logging, los gráficos headless, un smoke test de la GUI y el aislamiento estructural agente/experimento.
+89 tests cubren, además de todo lo de Fase A (generación de estímulos sin atajo trivial, la frontera de aislamiento, convergencia de la política, el modelo de recompensa, el detector de estabilidad, la distancia entre políticas, la transición completa `π₀ → π₁ → π₂`, determinismo del logging, los gráficos headless, un smoke test de la GUI y el aislamiento estructural agente/experimento): baseline multi-seed, estados STABLE/UNSTABLE/TIMEOUT (con guardia mecánica de que nunca se fuerza una convergencia falsa), entropía y distancia temporal `D_t`, el grupo de control, SELF_A/SELF_B/OTHER (incluido el entrenamiento del agente auxiliar), el conflicto progresivo, la comparación entre condiciones y entre agentes (con guardia mecánica de que nunca se produce un ranking), la equivalencia e intercambiabilidad de `BaselineAgent`/`ConnectomeInspiredAgent`, los renderers intercambiables y el lenguaje del informe automático.
 
 ## Qué es hipótesis experimental y qué es decisión de implementación
 
@@ -135,4 +147,4 @@ Documentado directamente en el código donde aplica (docstrings de `StabilityCon
 
 ## Estado del proyecto
 
-Fase A (versión mínima funcional) completa. Pendiente para Fase B: grupo de control, `SELF_B`/`OTHER` ("falsos espejos"), conflicto progresivo en etapas 2-4, métricas avanzadas, arquitectura inspirada en circuitos de Drosophila, visualización 3D.
+Fase A y Fase B completas. Pendiente: visualización 3D (el punto de extensión ya existe, sin implementación). El diagnóstico de por qué la política frecuentemente no reconvergía tras la introducción de `SELF` (baseline de REINFORCE compartido entre regímenes de recompensa muy distintos + criterio de estabilidad que no aísla la categoría autorreferencial) está documentado en los docstrings de `self_fly/agent/baseline/learner.py`, `self_fly/experiment/stability.py` y `self_fly/experiment/stage_outcome.py`, y es la motivación directa de los estados `STABLE`/`UNSTABLE`/`TIMEOUT` y de las métricas de entropía/`D_t` de Fase B.

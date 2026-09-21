@@ -36,6 +36,9 @@ def test_run_manager_writes_config_manifest_and_logs(tmp_path):
     assert manifest["status"] == "completed"
     assert manifest["seed"] == 0
     assert manifest["finished_at"] is not None
+    assert manifest["agent_type"] == "baseline"
+    assert manifest["experimental_condition"] == "baseline"
+    assert "git_revision" in manifest  # None outside a git checkout, but the key must exist
 
     trials = _read_jsonl(run_manager.run_dir / "trials.jsonl")
     assert len(trials) == 30

@@ -8,6 +8,7 @@ from pathlib import Path
 from self_fly.config.loader import config_to_dict
 from self_fly.config.schema import ExperimentConfig
 
+from .git_info import current_git_revision
 from .logger import TrialLogger
 
 
@@ -34,6 +35,7 @@ class RunManager:
 
         self._config_hash = canonical_config_hash(config)
         self._started_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        self._git_revision = current_git_revision()
 
         (self.run_dir / "config.json").write_text(
             json.dumps(config_to_dict(config), indent=2, ensure_ascii=False)
@@ -44,7 +46,10 @@ class RunManager:
         manifest = {
             "run_id": self.run_id,
             "seed": self.config.seed,
+            "agent_type": self.config.agent_type,
+            "experimental_condition": self.config.experimental_condition,
             "config_hash": self._config_hash,
+            "git_revision": self._git_revision,
             "started_at": self._started_at,
             "finished_at": finished_at,
             "status": status,

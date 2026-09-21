@@ -22,6 +22,20 @@ ACTION_ORDER = ("REAL", "FALSA", "NO_SE")
 STAGE_LABELS = {
     0: "ETAPA 0 · aprendizaje normal",
     1: "ETAPA 1 · periodo de estimulo autorreferencial activo",
+    2: "ETAPA 2 · conflicto leve",
+    3: "ETAPA 3 · conflicto fuerte",
+    4: "ETAPA 4 · conflicto de tres vias (SELF_A/SELF_B/OTHER)",
+}
+
+# Observer-facing only (see README's agent/visualization separation): the
+# GUI is allowed to know which frozen stimulus category is on screen,
+# because this drives a banner shown to the human, never anything fed
+# back into agent/. NO_SPECIAL_LABELS marks the ordinary REAL/FALSA case.
+SPECIAL_STIMULUS_BANNERS = {
+    "self_a": "estimulo AUTORREFERENCIAL (SELF_A) en pantalla",
+    "self_b": "estimulo AUTORREFERENCIAL variante (SELF_B) en pantalla",
+    "other": "estimulo de OTRO agente en pantalla",
+    "control": "estimulo de CONTROL (congelado, no autorreferencial) en pantalla",
 }
 
 HISTORY_LIMIT = 800
@@ -57,6 +71,11 @@ class SelfFlyApp:
     def _build_widgets(self) -> None:
         self.stage_banner = tk.Label(self.root, text="", font=("Sans", 14, "bold"), pady=8)
         self.stage_banner.pack(fill="x")
+
+        self.special_stimulus_banner = tk.Label(
+            self.root, text="", font=("Sans", 10, "italic"), pady=2, fg="#a33"
+        )
+        self.special_stimulus_banner.pack(fill="x")
 
         main = tk.Frame(self.root)
         main.pack(fill="both", expand=True)
@@ -109,6 +128,9 @@ class SelfFlyApp:
     def _refresh(self, trial: Trial) -> None:
         stage = self.engine.current_stage
         self.stage_banner.config(text=STAGE_LABELS.get(stage, f"ETAPA {stage}"))
+        self.special_stimulus_banner.config(
+            text=SPECIAL_STIMULUS_BANNERS.get(trial.ground_truth_label, "")
+        )
 
         features = FeatureVector.from_tuple(trial.features)
         render_stimulus(self.canvas, features, cx=110, cy=110, size=70)
@@ -125,6 +147,9 @@ class SelfFlyApp:
 
         snapshots = ", ".join(self.engine.policy_snapshots.keys()) or "-"
         status = "finalizado" if self.engine.stage_machine.finished else "en curso"
+        entropy = self.metrics.entropy_history[-1] if self.metrics.entropy_history else None
+        entropy_text = f"{entropy:.3f}" if entropy is not None else "-"
+        dt_text = f"{trial.policy_js_delta:.4f}" if trial.policy_js_delta is not None else "-"
         self.info_label.config(
             text=(
                 f"Etapa:           {stage}\n"
@@ -134,6 +159,8 @@ class SelfFlyApp:
                 f"P(REAL):         {probs['REAL']:.3f}\n"
                 f"P(FALSA):        {probs['FALSA']:.3f}\n"
                 f"P(NO_SE):        {probs['NO_SE']:.3f}\n"
+                f"H(pi):           {entropy_text}\n"
+                f"D_t = JS(t,t-1): {dt_text}\n"
                 f"Snapshots:       {snapshots}\n"
                 f"Estado:          {status}\n"
             )

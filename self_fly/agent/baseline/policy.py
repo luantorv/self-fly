@@ -5,7 +5,7 @@ import numpy as np
 from self_fly.config.schema import LearnerConfig
 from self_fly.stimuli.features import FEATURE_ORDER
 
-from .actions import ACTIONS, Action
+from ..actions import ACTIONS, Action
 
 
 class LinearSoftmaxPolicy:

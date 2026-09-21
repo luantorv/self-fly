@@ -5,13 +5,30 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .schema import (
+    ConflictConfig,
+    ConnectomeConfig,
+    ControlStimulusConfig,
     ExperimentConfig,
     LearnerConfig,
     RewardConfig,
+    SelfVariantConfig,
     StabilityConfig,
     StageConfig,
     StimulusConfig,
 )
+
+
+def _stage_config_from_dict(data: dict) -> StageConfig:
+    conflict_data = data.get("conflict")
+    conflict = None
+    if conflict_data:
+        # JSON has no tuple type -- categories round-trips as a list, but
+        # ConflictConfig.categories is a tuple, so dataclass equality
+        # (round-trip tests) needs it cast back explicitly.
+        conflict = ConflictConfig(**{**conflict_data, "categories": tuple(conflict_data["categories"])})
+    return StageConfig(
+        **{**{k: v for k, v in data.items() if k != "conflict"}, "conflict": conflict}
+    )
 
 
 def config_to_dict(config: ExperimentConfig) -> dict:
@@ -26,7 +43,14 @@ def config_from_dict(data: dict) -> ExperimentConfig:
         stability=StabilityConfig(**data["stability"]),
         stimulus=StimulusConfig(**data["stimulus"]),
         learner=LearnerConfig(**data["learner"]),
-        stages=[StageConfig(**s) for s in data["stages"]],
+        stages=[_stage_config_from_dict(s) for s in data["stages"]],
+        # .get() with the ExperimentConfig default, not data[...]: configs
+        # saved before Phase B added these fields must still load.
+        agent_type=data.get("agent_type", "baseline"),
+        experimental_condition=data.get("experimental_condition", "baseline"),
+        control_stimulus=ControlStimulusConfig(**data.get("control_stimulus", {})),
+        self_variant=SelfVariantConfig(**data.get("self_variant", {})),
+        connectome=ConnectomeConfig(**data.get("connectome", {})),
     )
 
 

@@ -22,9 +22,25 @@ class RewardModel:
     def __init__(self, config: ExperimentConfig):
         self.config = config
         self._stage_by_number = {s.stage: s for s in config.stages}
+        # Mutable by design (unlike the rest of this class): a maintain/
+        # change reward needs to remember the last non-NO_SE action taken
+        # toward each conflict category. Keyed by category_id (falling back
+        # to label.value if the caller doesn't have one), never shared
+        # across RewardModel instances -- each ExperimentEngine owns its own.
+        self._last_action_by_category: dict[str, Action] = {}
 
-    def compute(self, label: StimulusLabel, action: Action, stage: int) -> float:
+    def compute(
+        self,
+        label: StimulusLabel,
+        action: Action,
+        stage: int,
+        category_id: str | None = None,
+    ) -> float:
         stage_cfg = self._stage_by_number.get(stage)
+
+        if stage_cfg is not None and stage_cfg.conflict is not None and label.value in stage_cfg.conflict.categories:
+            return self._compute_conflict_reward(stage_cfg.conflict, label, action, category_id)
+
         if stage_cfg is not None:
             key = f"{label.value}|{action.value}"
             if key in stage_cfg.reward_overrides:
@@ -41,3 +57,24 @@ class RewardModel:
             f"No reward rule for label={label.value} action={action.value} stage={stage}. "
             "Add an explicit reward_overrides entry in the stage config."
         )
+
+    def _compute_conflict_reward(
+        self,
+        conflict,
+        label: StimulusLabel,
+        action: Action,
+        category_id: str | None,
+    ) -> float:
+        key = category_id or label.value
+
+        if action == Action.NO_SE:
+            return conflict.no_se_reward
+
+        previous = self._last_action_by_category.get(key)
+        reward = (
+            conflict.first_exposure_reward
+            if previous is None
+            else (conflict.maintain_reward if action == previous else conflict.change_reward)
+        )
+        self._last_action_by_category[key] = action
+        return reward
