@@ -46,11 +46,29 @@ run_gui.py          # GUI de tkinter (mismo motor)
 tests/              # 33 tests, incluido el de aislamiento AST
 ```
 
-## Cómo ejecutar
+## Instalación
 
-Con Nix instalado, no hace falta preparar nada más:
+### Requisitos
+
+- [Nix](https://nixos.org/download.html) con [flakes](https://nixos.wiki/wiki/Flakes) habilitados. Es la única dependencia: Nix se encarga de traer Python, numpy, matplotlib, pytest y tkinter en las versiones correctas, así que no hace falta gestionar un virtualenv ni instalar nada más a mano.
+
+### Probarlo sin clonar
+
+Con Nix instalado, se puede ejecutar directamente desde GitHub:
 
 ```bash
+nix run github:luantorv/self-fly          # experimento headless
+nix run github:luantorv/self-fly#gui      # interfaz gráfica (tkinter)
+```
+
+### Clonar y desarrollar
+
+Para modificar el código, correr los tests o pasar flags propios:
+
+```bash
+git clone https://github.com/luantorv/self-fly.git
+cd self-fly
+
 # entorno de desarrollo (python + numpy + matplotlib + pytest + tkinter)
 nix develop
 
@@ -61,13 +79,6 @@ nix run .#headless -- --seed 0 --n-trials 5000
 nix run .#gui -- --seed 0
 
 # nix run . (sin sufijo) equivale a #headless
-```
-
-Una vez el repositorio esté en GitHub, ambos modos funcionan directamente sin clonar:
-
-```bash
-nix run github:<usuario>/<repo>          # headless
-nix run github:<usuario>/<repo>#gui      # GUI
 ```
 
 Dentro de `nix develop`, también se puede invocar directamente:
