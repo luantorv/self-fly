@@ -4,8 +4,8 @@ from dataclasses import replace
 import pytest
 
 from self_fly.config.defaults import condition_multi_self_config, default_config
-from self_fly.config.schema import StabilityConfig
 from self_fly.visualization.gui import SelfFlyApp
+from stability_helpers import fast_stability_config
 
 
 def _make_root():
@@ -41,14 +41,7 @@ def test_gui_runs_many_steps_without_exceptions():
 
 def _fast_multi_self_config(seed: int = 0):
     config = condition_multi_self_config(seed=seed)
-    fast_stability = StabilityConfig(
-        window_size=15,
-        tv_threshold=0.35,
-        reward_delta_threshold=0.6,
-        cv_threshold=1.5,
-        consistency_threshold=0.1,
-        consecutive_windows_required=2,
-    )
+    fast_stability = fast_stability_config()
     stage0, stage1 = config.stages
     stage1 = replace(stage1, max_trials=300)
     return replace(config, stability=fast_stability, stages=[stage0, stage1])

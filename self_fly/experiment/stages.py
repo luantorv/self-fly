@@ -118,18 +118,23 @@ class StageMachine:
     ) -> list[StageEvent]:
         events: list[StageEvent] = []
 
-        # "Special exposure" = any stimulus other than plain REAL/FALSA --
-        # self_a, control, self_b, other, whichever this stage's
-        # stimulus_mix actually uses. Generalized so pi_1/hit_stability
-        # gating doesn't need a growing list of label names hardcoded here.
-        is_special_exposure = trial.ground_truth_label not in ("real", "falsa")
-        if not self._self_exposed and is_special_exposure:
+        # Keyed on the experimental SLOT rather than on the stimulus being
+        # special. In BASELINE the slots carry ordinary REAL/FALSA, and it
+        # still has to reach pi_1 and be able to conclude stage 1 by
+        # stability -- otherwise the one condition that serves as the null
+        # would be structurally incapable of producing STABLE, and its
+        # outcomes could not be compared with anything.
+        if not self._self_exposed and trial.is_slot:
             self._self_exposed = True
             events.append(
                 StageEvent(
                     "capture_snapshot",
                     trial.trial_index,
-                    {"name": "pi_1", "stage": int(Stage.STAGE_1_SELF_INTRODUCED)},
+                    # "post": the policy AFTER the update caused by this first
+                    # exposure. Its counterpart pi_1_pre is captured by the
+                    # engine before the stimulus reaches the agent -- the pair
+                    # is what isolates the effect of the exposure from drift.
+                    {"name": "pi_1_post", "stage": int(Stage.STAGE_1_SELF_INTRODUCED)},
                 )
             )
 

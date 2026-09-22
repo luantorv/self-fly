@@ -1,8 +1,8 @@
 from dataclasses import replace
 
 from self_fly.config.defaults import default_config
-from self_fly.config.schema import StabilityConfig
 from self_fly.experiment.engine import ExperimentEngine
+from stability_helpers import fast_stability_config
 
 
 def test_bare_pi_2_never_appears_when_stage_1_times_out():
@@ -10,14 +10,7 @@ def test_bare_pi_2_never_appears_when_stage_1_times_out():
     that never actually stabilizes must never be represented as if it had
     -- 'pi_2' bare is reserved for a real StageOutcome.STABLE."""
     config = default_config(seed=0)
-    fast_stability = StabilityConfig(
-        window_size=15,
-        tv_threshold=0.35,
-        reward_delta_threshold=0.6,
-        cv_threshold=1.5,
-        consistency_threshold=0.1,
-        consecutive_windows_required=2,
-    )
+    fast_stability = fast_stability_config()
     stage0, stage1 = config.stages
     stage1 = replace(stage1, max_trials=5)  # far too small to ever stabilize
     config = replace(config, stability=fast_stability, stages=[stage0, stage1])

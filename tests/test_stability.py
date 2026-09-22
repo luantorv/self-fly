@@ -1,5 +1,3 @@
-import numpy as np
-
 from self_fly.config.schema import StabilityConfig
 from self_fly.experiment.stability import StabilityDetector, tv_distance
 from self_fly.experiment.types import Trial
@@ -21,6 +19,26 @@ def _make_trial(idx: int, action: str, reward: float, category: str = "c0") -> T
     )
 
 
+def _config(**kwargs) -> StabilityConfig:
+    base = dict(
+        window_size=10,
+        min_accuracy=0.70,
+        max_median_policy_delta=0.002,
+        consecutive_windows_required=2,
+    )
+    base.update(kwargs)
+    return StabilityConfig(**base)
+
+
+def _feed(detector, n, delta, start=0):
+    events = []
+    for i in range(n):
+        event = detector.update(_make_trial(start + i, "REAL", 1.0), delta)
+        if event is not None:
+            events.append(event)
+    return events
+
+
 def test_tv_distance_basic_properties():
     p = {"REAL": 0.9, "FALSA": 0.05, "NO_SE": 0.05}
     assert tv_distance(p, p) == 0.0
@@ -28,49 +46,60 @@ def test_tv_distance_basic_properties():
     assert tv_distance(p, q) > 0.5
 
 
-def test_stability_detector_ignores_transition_and_fires_on_plateau():
-    config = StabilityConfig(
-        window_size=50,
-        tv_threshold=0.15,
-        reward_delta_threshold=0.3,
-        cv_threshold=0.5,
-        consistency_threshold=0.5,
-        consecutive_windows_required=2,
+def test_fires_only_after_enough_consecutive_settled_windows():
+    detector = StabilityDetector(_config(), accuracy_fn=lambda: 0.8)
+
+    assert _feed(detector, 10, 0.0001) == []  # one window: not enough yet
+    events = _feed(detector, 10, 0.0001, start=10)  # second consecutive window
+    assert len(events) == 1
+    assert events[0].accuracy == 0.8
+    assert events[0].median_policy_delta <= 0.002
+
+
+def test_drifting_policy_never_fires():
+    detector = StabilityDetector(_config(), accuracy_fn=lambda: 0.9)
+    assert _feed(detector, 100, 0.5) == []
+    assert detector.max_consecutive_stable_observed == 0
+
+
+def test_incompetent_policy_never_fires_even_when_perfectly_settled():
+    detector = StabilityDetector(_config(), accuracy_fn=lambda: 0.55)
+    assert _feed(detector, 100, 0.0) == []
+
+
+def test_streak_resets_on_a_single_bad_window():
+    detector = StabilityDetector(_config(consecutive_windows_required=3), accuracy_fn=lambda: 0.8)
+    _feed(detector, 20, 0.0001)  # streak of 2
+    assert detector.max_consecutive_stable_observed == 2
+    _feed(detector, 10, 0.5, start=20)  # one drifting window breaks it
+    assert _feed(detector, 20, 0.0001, start=30) == []  # only back to 2
+
+
+def test_criterion_is_unaffected_by_zero_reward_stimuli():
+    """The previous coefficient-of-variation criterion divided by the mean
+    reward, so mixing in zero-reward stimuli made stability strictly harder
+    to reach even with identical behaviour. The criterion must no longer
+    depend on reward magnitude at all."""
+    settled = 0.0001
+
+    rewarded = StabilityDetector(_config(), accuracy_fn=lambda: 0.8)
+    for i in range(20):
+        rewarded.update(_make_trial(i, "REAL", 1.0), settled)
+
+    zero_reward = StabilityDetector(_config(), accuracy_fn=lambda: 0.8)
+    for i in range(20):
+        zero_reward.update(_make_trial(i, "REAL", 0.0), settled)
+
+    assert (
+        rewarded.max_consecutive_stable_observed
+        == zero_reward.max_consecutive_stable_observed
+        == 2
     )
-    detector = StabilityDetector(config)
-    rng = np.random.default_rng(0)
-    idx = 0
 
-    def feed(n: int, probs: list[float]) -> list:
-        nonlocal idx
-        events = []
-        for _ in range(n):
-            action = rng.choice(["REAL", "FALSA", "NO_SE"], p=probs)
-            reward = 1.0 if action == "REAL" else -1.0
-            event = detector.update(_make_trial(idx, action, reward))
-            idx += 1
-            if event is not None:
-                events.append(event)
-        return events
 
-    # Two stationary windows: only one comparison so far, not enough to declare stability.
-    assert feed(100, [0.9, 0.05, 0.05]) == []
-
-    # A third stationary window makes it two consecutive stable comparisons -> fires.
-    events = feed(50, [0.9, 0.05, 0.05])
-    assert len(events) == 1
-
-    # Abrupt change in behaviour: the very next comparison must not look stable.
-    assert feed(50, [0.1, 0.85, 0.05]) == []
-
-    # Sustained new plateau: eventually fires again once enough consecutive
-    # windows (and the reward-baseline CV) reflect the new, stable behaviour.
-    # Exactly how many windows that takes depends on how far the stale
-    # pre-transition reward mean has to age out of the CV check, so we poll
-    # for it rather than hardcoding a window count.
-    events: list = []
-    windows_fed = 0
-    while not events and windows_fed < 6:
-        events = feed(50, [0.1, 0.85, 0.05])
-        windows_fed += 1
-    assert len(events) == 1
+def test_reset_clears_history_at_a_stage_boundary():
+    detector = StabilityDetector(_config(), accuracy_fn=lambda: 0.8)
+    _feed(detector, 10, 0.0001)
+    detector.reset()
+    assert detector.max_consecutive_stable_observed == 0
+    assert _feed(detector, 10, 0.0001, start=10) == []  # streak restarted

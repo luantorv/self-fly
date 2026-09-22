@@ -10,28 +10,28 @@ from pathlib import Path
 
 from self_fly.analysis.aggregate import aggregate_runs, compare_conditions
 from self_fly.analysis.report import generate_report
-from self_fly.config.defaults import (
-    condition_control_config,
-    condition_multi_self_config,
-    condition_self_config,
-    default_config,
-)
+from self_fly.analysis.temporal_dynamics import classify_dt_series
+from self_fly.config.conditions import CONDITION_BUILDERS
+from self_fly.config.defaults import default_config
 from self_fly.config.loader import load_config
 from self_fly.config.schema import ExperimentConfig
 from self_fly.experiment.engine import ExperimentEngine
 from self_fly.experiment.entropy import mean_policy_entropy
+from self_fly.experiment.policy_distance import policy_distance_from_snapshots
+from self_fly.experiment.special_evaluation import (
+    evaluate_snapshots_on_special_stimuli,
+    stimulus_space_distances,
+)
 from self_fly.io.run_manager import RunManager
 from self_fly.metrics.collectors import MetricsCollector
 from self_fly.visualization.plots import generate_all_plots
 
-CONDITIONS = ("baseline", "control", "self", "self_multi")
+# The causal ladder of protocol §29: each step adds exactly one property
+# (zero reward -> repetition -> generative structure -> authorship).
+CONDITIONS = ("baseline", "fresh", "control", "other", "self")
+ALL_CONDITIONS = tuple(CONDITION_BUILDERS)
 
-_CONDITION_CONFIG_BUILDERS = {
-    "baseline": default_config,
-    "control": condition_control_config,
-    "self": condition_self_config,
-    "self_multi": condition_multi_self_config,
-}
+_CONDITION_CONFIG_BUILDERS = CONDITION_BUILDERS
 
 
 def build_config(args: argparse.Namespace) -> ExperimentConfig:
@@ -67,26 +67,63 @@ def run(args: argparse.Namespace) -> dict:
     metrics = MetricsCollector()
     engine = ExperimentEngine(config, logger=run_manager.logger, metrics=metrics)
 
-    engine.run(args.n_trials)
+    trials = engine.run(args.n_trials)
 
-    pi2_name = next((name for name in engine.policy_snapshots if name.startswith("pi_2")), None)
+    snapshots = engine.policy_snapshots
+    pi2_name = next((name for name in snapshots if name.startswith("pi_2")), None)
 
     def _entropy_at(name: str | None) -> float | None:
-        return mean_policy_entropy(engine.policy_snapshots[name]) if name in engine.policy_snapshots else None
+        return mean_policy_entropy(snapshots[name]) if name in snapshots else None
+
+    def _distance(a: str | None, b: str | None) -> dict | None:
+        if a in snapshots and b in snapshots:
+            return policy_distance_from_snapshots(snapshots[a], snapshots[b])
+        return None
+
+    special = engine.special_stimuli_features()
+    deltas = [t.policy_js_delta for t in trials]
 
     summary = {
         "run_id": run_manager.run_id,
         "trial_count": metrics.trial_count,
         "cumulative_reward": metrics.cumulative_reward,
         "mean_reward": metrics.mean_reward(),
+        "task_accuracy": engine.task_accuracy(),
         "mean_entropy": metrics.mean_entropy() if metrics.entropy_history else None,
         "entropy_at_pi0": _entropy_at("pi_0"),
-        "entropy_at_pi1": _entropy_at("pi_1"),
+        "entropy_at_pi1_pre": _entropy_at("pi_1_pre"),
+        "entropy_at_pi1": _entropy_at("pi_1_post"),
         "entropy_at_pi2": _entropy_at(pi2_name),
+        # Snapshot-to-snapshot distances. Previously none of these were
+        # persisted, so even JS(pi_0, pi_1) required an external script.
+        "policy_distances": {
+            "pi0_to_pi1_pre": _distance("pi_0", "pi_1_pre"),
+            "pi1_pre_to_pi1_post": _distance("pi_1_pre", "pi_1_post"),
+            "pi0_to_pi1_post": _distance("pi_0", "pi_1_post"),
+            "pi0_to_pi2": _distance("pi_0", pi2_name),
+            "pi1_post_to_pi2": _distance("pi_1_post", pi2_name),
+        },
+        # The experiment's primary measurement (see special_evaluation.py).
+        "special_stimulus_response": evaluate_snapshots_on_special_stimuli(
+            config, snapshots, special
+        ),
+        "special_stimulus_distances": stimulus_space_distances(special),
+        "dt_series": classify_dt_series(deltas),
         "action_frequencies": metrics.action_frequencies(),
+        "action_counts_by_category": {
+            category: dict(counts)
+            for category, counts in metrics.action_counts_by_label.items()
+        },
+        "n_by_category": {
+            category: sum(counts.values())
+            for category, counts in metrics.action_counts_by_label.items()
+        },
         "stage_reached": engine.current_stage,
         "experiment_finished": engine.stage_machine.finished,
-        "policy_snapshots_captured": list(engine.policy_snapshots.keys()),
+        "policy_snapshots_captured": list(snapshots.keys()),
+        "auxiliary_agent_outcome": (
+            engine.other_agent_outcome.value if engine.other_agent_outcome else None
+        ),
     }
     run_manager.write_metrics_summary(summary)
     generate_all_plots(run_manager.logger.trials_path, run_manager.run_dir / "plots")
@@ -140,7 +177,7 @@ def main() -> None:
         "--condition",
         type=str,
         default=None,
-        choices=[*CONDITIONS, "all"],
+        choices=[*ALL_CONDITIONS, "all"],
         help="Experimental condition; 'all' runs every condition and compares them (needs --seeds)",
     )
     parser.add_argument("--n-trials", type=int, default=2000, help="Number of trials to run")

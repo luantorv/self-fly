@@ -1,20 +1,13 @@
 from dataclasses import replace
 
 from self_fly.config.defaults import condition_progressive_conflict_config
-from self_fly.config.schema import StabilityConfig
 from self_fly.experiment.engine import ExperimentEngine
+from stability_helpers import fast_stability_config
 
 
 def _fast_conflict_config(seed: int = 0, stage_max_trials: int = 60):
     config = condition_progressive_conflict_config(seed=seed)
-    fast_stability = StabilityConfig(
-        window_size=15,
-        tv_threshold=0.35,
-        reward_delta_threshold=0.6,
-        cv_threshold=1.5,
-        consistency_threshold=0.1,
-        consecutive_windows_required=2,
-    )
+    fast_stability = fast_stability_config()
     stage0, stage1, stage2, stage3, stage4 = config.stages
     stage1 = replace(stage1, max_trials=stage_max_trials)
     stage2 = replace(stage2, max_trials=stage_max_trials)

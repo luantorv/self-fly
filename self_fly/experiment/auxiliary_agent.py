@@ -14,17 +14,18 @@ def train_auxiliary_agent_to_stability(
     seed: int,
     stage0_config: StageConfig,
     max_trials: int,
-) -> tuple[Agent, StageOutcome]:
+) -> tuple[Agent, StageOutcome, float]:
     """Trains a second, fully isolated agent on the same REAL/FALSA task to
     stand in for "another agent" (OTHER). Reuses ExperimentEngine wholesale
     (its own RNG stream from `seed`, its own StabilityDetector, its own
     StimulusGenerator) rather than reimplementing the learning loop --
     nothing here shares state with the main experiment's agent or RNG.
 
-    If the auxiliary agent does not stabilize within max_trials, the
-    caller must not silently treat it as valid: this returns whatever
-    (agent, StageOutcome) was actually reached, following the same
-    no-forcing rule as the main experiment's stage 1.
+    Returns the accuracy it actually reached alongside the outcome, so the
+    caller can refuse a signature that does not represent a learned
+    policy. If the agent does not stabilize within max_trials, the caller
+    must not silently treat it as valid: this returns whatever was
+    actually reached, following the same no-forcing rule as stage 1.
     """
     from .engine import ExperimentEngine  # local: engine.py imports this module too
 
@@ -51,4 +52,4 @@ def train_auxiliary_agent_to_stability(
     else:
         outcome = StageOutcome.TIMEOUT
 
-    return engine.agent, outcome
+    return engine.agent, outcome, engine.task_accuracy()

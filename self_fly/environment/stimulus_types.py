@@ -13,6 +13,11 @@ class StimulusLabel(Enum):
     SELF_B = "self_b"
     OTHER = "other"
     CONTROL = "control"
+    # In-distribution like CONTROL and zero-reward like every special
+    # category, but re-drawn on every appearance instead of frozen. That
+    # single difference is what separates "the slot carries no reward"
+    # from "the slot carries the same stimulus over and over".
+    FRESH = "fresh"
 
 
 @dataclass(frozen=True)

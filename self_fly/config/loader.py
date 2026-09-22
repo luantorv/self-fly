@@ -10,6 +10,7 @@ from .schema import (
     ControlStimulusConfig,
     ExperimentConfig,
     LearnerConfig,
+    ProtocolConfig,
     RewardConfig,
     SelfVariantConfig,
     StabilityConfig,
@@ -51,6 +52,7 @@ def config_from_dict(data: dict) -> ExperimentConfig:
         control_stimulus=ControlStimulusConfig(**data.get("control_stimulus", {})),
         self_variant=SelfVariantConfig(**data.get("self_variant", {})),
         connectome=ConnectomeConfig(**data.get("connectome", {})),
+        protocol=ProtocolConfig(**data.get("protocol", {})),
     )
 
 

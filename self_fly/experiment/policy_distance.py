@@ -45,24 +45,49 @@ def build_reference_set(
 
 
 class TemporalDistanceTracker:
-    """Continuous D_t = JS(pi_t, pi_{t-1}), evaluated over the same S_ref
-    used for snapshot comparisons, every trial rather than only at
-    pi_0/pi_1/pi_2 boundaries -- this is what lets convergence, oscillation,
-    drift, and abrupt change be told apart between snapshots, not just at
-    them."""
+    """Continuous D_t = JS(pi_t, pi_{t-1}) over S_ref, every trial rather
+    than only at snapshot boundaries -- this is what lets convergence,
+    oscillation, drift and abrupt change be told apart between snapshots.
+
+    Two properties this must have, and neither is automatic:
+
+    1. The measurement is COUNTERFACTUAL. It goes through
+       `agent.evaluate()`, which has no side effects, so the probe set
+       never becomes part of a recurrent agent's experience.
+    2. Both terms are evaluated under the SAME conditioning state, so
+       D_t reflects a change of parameters and not a change of internal
+       state. That requires re-evaluating the PREVIOUS parameters under
+       the CURRENT state, which is why the caller supplies a restorable
+       snapshot of the previous parameters rather than cached
+       probabilities from last trial.
+    """
 
     def __init__(self, reference_set: list[np.ndarray]):
         self.reference_set = reference_set
-        self._previous_probs: list[np.ndarray] | None = None
+        self._previous_params: dict | None = None
 
-    def step(self, probabilities_fn) -> float | None:
-        current = [probabilities_fn(features) for features in self.reference_set]
-        if self._previous_probs is None:
-            self._previous_probs = current
+    def step(self, agent) -> float | None:
+        """D_t comparing `agent` now against its parameters one step ago,
+        both evaluated from the agent's current conditioning state."""
+        conditioning = agent.recurrent_state()
+        current = agent.evaluate(self.reference_set, conditioning_state=conditioning)
+
+        previous_params = self._previous_params
+        live_params = agent.parameters()
+        self._previous_params = live_params
+
+        if previous_params is None:
             return None
-        distance = float(np.mean([js_distance(p, q) for p, q in zip(self._previous_probs, current)]))
-        self._previous_probs = current
-        return distance
+
+        # Swap parameters only -- recurrent and learner state are untouched,
+        # so this temporary evaluation cannot perturb the trajectory.
+        agent.set_parameters(previous_params)
+        try:
+            previous = agent.evaluate(self.reference_set, conditioning_state=conditioning)
+        finally:
+            agent.set_parameters(live_params)
+
+        return float(np.mean([js_distance(p, q) for p, q in zip(previous, current)]))
 
 
 def policy_distance(

@@ -5,18 +5,11 @@ import run_experiment
 from self_fly.analysis.aggregate import compare_conditions
 from self_fly.config.defaults import condition_control_config, default_config
 from self_fly.config.loader import save_config
-from self_fly.config.schema import StabilityConfig
+from stability_helpers import fast_stability_config
 
 
 def _fast(config, stage1_max_trials: int = 100):
-    fast_stability = StabilityConfig(
-        window_size=15,
-        tv_threshold=0.35,
-        reward_delta_threshold=0.6,
-        cv_threshold=1.5,
-        consistency_threshold=0.1,
-        consecutive_windows_required=2,
-    )
+    fast_stability = fast_stability_config()
     stage0, stage1 = config.stages
     stage1 = replace(stage1, max_trials=stage1_max_trials)
     return replace(config, stability=fast_stability, stages=[stage0, stage1])

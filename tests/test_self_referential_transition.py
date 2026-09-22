@@ -1,20 +1,13 @@
 from dataclasses import replace
 
 from self_fly.config.defaults import default_config
-from self_fly.config.schema import StabilityConfig
 from self_fly.experiment.engine import ExperimentEngine
+from stability_helpers import fast_stability_config
 
 
 def _fast_stability_config(seed: int = 0):
     config = default_config(seed=seed)
-    fast_stability = StabilityConfig(
-        window_size=15,
-        tv_threshold=0.35,
-        reward_delta_threshold=0.6,
-        cv_threshold=1.5,
-        consistency_threshold=0.1,
-        consecutive_windows_required=2,
-    )
+    fast_stability = fast_stability_config()
     stage0, stage1 = config.stages
     stage1 = replace(stage1, max_trials=400)
     return replace(config, stability=fast_stability, stages=[stage0, stage1])
@@ -31,16 +24,42 @@ def test_pi0_pi1_pi2_are_captured_in_order_and_stage_transitions_once():
         steps_taken += 1
 
     assert engine.stage_machine.finished, "experiment did not finish within max_steps"
-    assert set(engine.policy_snapshots.keys()) == {"pi_0", "pi_1", "pi_2"}
+    assert set(engine.policy_snapshots.keys()) == {"pi_0", "pi_1_pre", "pi_1_post", "pi_2"}
 
     pi0 = engine.policy_snapshots["pi_0"]
-    pi1 = engine.policy_snapshots["pi_1"]
+    pi1_pre = engine.policy_snapshots["pi_1_pre"]
+    pi1_post = engine.policy_snapshots["pi_1_post"]
     pi2 = engine.policy_snapshots["pi_2"]
 
     assert pi0.stage == 0
-    assert pi1.stage == 1
+    assert pi1_pre.stage == 1
+    assert pi1_post.stage == 1
     assert pi2.stage == 1
-    assert pi0.trial_index < pi1.trial_index < pi2.trial_index
+    # pre and post bracket the same trial: the first special exposure.
+    assert pi0.trial_index < pi1_pre.trial_index
+    assert pi1_pre.trial_index == pi1_post.trial_index
+    assert pi1_post.trial_index < pi2.trial_index
+
+
+def test_pi1_pre_is_captured_before_the_agent_sees_the_stimulus():
+    """pi_1_pre must be the policy untouched by the first special
+    exposure, so JS(pi_1_pre, pi_1_post) isolates that exposure's effect
+    from the drift accumulated since pi_0."""
+    from self_fly.experiment.policy_distance import policy_distance_from_snapshots
+
+    engine = ExperimentEngine(_fast_stability_config(seed=0))
+    steps = 0
+    while not engine.stage_machine.finished and steps < 5000:
+        engine.step()
+        steps += 1
+
+    snaps = engine.policy_snapshots
+    drift_before = policy_distance_from_snapshots(snaps["pi_0"], snaps["pi_1_pre"])["js"]
+    exposure_effect = policy_distance_from_snapshots(snaps["pi_1_pre"], snaps["pi_1_post"])["js"]
+
+    # Both are now separately measurable; neither is a stand-in for the other.
+    assert drift_before >= 0.0
+    assert exposure_effect > 0.0
 
     event_kinds = [e.kind for e in engine.stage_events]
     assert event_kinds.count("stage_changed") == 1

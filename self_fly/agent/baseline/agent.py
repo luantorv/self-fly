@@ -41,6 +41,16 @@ class BaselineAgent:
     ) -> None:
         self._state.learner.update(self._state.policy, features, action_idx, reward, probs)
 
+    def evaluate(self, inputs_batch, conditioning_state: np.ndarray | None = None) -> np.ndarray:
+        """Action distributions for a batch of inputs. This agent is
+        stateless, so `conditioning_state` is accepted (for interface
+        parity with the recurrent agent) and ignored. Already free of
+        side effects."""
+        return np.array([self.probabilities(np.asarray(x, dtype=float)) for x in inputs_batch])
+
+    def recurrent_state(self) -> np.ndarray | None:
+        return None
+
     def weight_norm_scalar(self) -> float:
         return self._state.weight_norm_scalar()
 
@@ -53,3 +63,25 @@ class BaselineAgent:
             "weights": self._state.policy.W.tolist(),
             "bias": self._state.policy.b.tolist(),
         }
+
+    def parameters(self) -> dict:
+        return {"W": self._state.policy.W.copy(), "b": self._state.policy.b.copy()}
+
+    def set_parameters(self, params: dict) -> None:
+        self._state.policy.W = params["W"].copy()
+        self._state.policy.b = params["b"].copy()
+
+    def full_state(self) -> dict:
+        return {
+            "agent_type": "baseline",
+            "policy_W": self._state.policy.W.tolist(),
+            "policy_b": self._state.policy.b.tolist(),
+            "learner_baseline": self._state.learner.baseline.value,
+            "learner_baseline_initialized": self._state.learner.baseline._initialized,
+        }
+
+    def load_state(self, state: dict) -> None:
+        self._state.policy.W = np.array(state["policy_W"], dtype=float)
+        self._state.policy.b = np.array(state["policy_b"], dtype=float)
+        self._state.learner.baseline.value = state["learner_baseline"]
+        self._state.learner.baseline._initialized = state["learner_baseline_initialized"]
